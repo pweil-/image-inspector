@@ -19,6 +19,7 @@ func main() {
 	flag.StringVar(&inspectorOptions.DockerCfg, "dockercfg", inspectorOptions.DockerCfg, "Location of the docker configuration file")
 	flag.StringVar(&inspectorOptions.Username, "username", inspectorOptions.Username, "username for authenticating with the docker registry")
 	flag.StringVar(&inspectorOptions.PasswordFile, "password-file", inspectorOptions.PasswordFile, "Location of a file that contains the password for authentication with the docker registry")
+	flag.StringVar(&inspectorOptions.OscapResultsArf, "openscap-results-arf", inspectorOptions.OscapResultsArf, "Run an OpenSCAP Scan on the inspected image and publish the reports. This value is also the reports location.")
 
 	flag.Parse()
 

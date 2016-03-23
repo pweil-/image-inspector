@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/simon3z/image-inspector/pkg/openscap"
 	"golang.org/x/net/webdav"
 
 	iicmd "github.com/simon3z/image-inspector/pkg/cmd"
@@ -35,7 +36,9 @@ const (
 	API_URL_PREFIX     = "/api"
 	CONTENT_URL_PREFIX = API_URL_PREFIX + "/" + VERSION_TAG + "/content/"
 	METADATA_URL_PATH  = API_URL_PREFIX + "/" + VERSION_TAG + "/metadata"
+	OPENSCAP_URL_PATH  = API_URL_PREFIX + "/" + VERSION_TAG + "/openscap"
 	CHROOT_SERVE_PATH  = "/"
+	OSCAP_CVE_DIR      = "/tmp"
 )
 
 // ImageInspector is the interface for all image inspectors.
@@ -47,11 +50,13 @@ type ImageInspector interface {
 // defaultImageInspector is the default implementation of ImageInspector.
 type defaultImageInspector struct {
 	opts iicmd.ImageInspectorOptions
+	meta iicmd.InspectorMetadata
 }
 
 // NewDefaultImageInspector provides a new default inspector.
 func NewDefaultImageInspector(opts iicmd.ImageInspectorOptions) ImageInspector {
-	return &defaultImageInspector{opts}
+	return &defaultImageInspector{opts,
+		*iicmd.NewInspectorMetadata(&docker.Image{})}
 }
 
 // Inspect inspects and serves the image based on the ImageInspectorOptions.
@@ -93,7 +98,7 @@ func (i *defaultImageInspector) Inspect() error {
 	container, err := client.CreateContainer(docker.CreateContainerOptions{
 		Name: randomName,
 		Config: &docker.Config{
-			Image:      i.opts.Image,
+			Image: i.opts.Image,
 			// For security purpose we don't define any entrypoint and command
 			Entrypoint: []string{""},
 			Cmd:        []string{""},
@@ -109,6 +114,7 @@ func (i *defaultImageInspector) Inspect() error {
 	}
 
 	imageMetadata, err := client.InspectImage(containerMetadata.Image)
+	i.meta.Image = *imageMetadata
 	if err != nil {
 		return fmt.Errorf("Unable to get docker image information: %v\n", err)
 	}
@@ -147,6 +153,11 @@ func (i *defaultImageInspector) Inspect() error {
 
 	supportedVersions := APIVersions{Versions: []string{VERSION_TAG}}
 
+	var arf_body []byte
+	if len(i.opts.OscapResultsArf) > 0 {
+		arf_body = i.runOpenSCAP()
+	}
+
 	if len(i.opts.Serve) > 0 {
 		servePath := i.opts.DstPath
 		if i.opts.Chroot {
@@ -176,12 +187,25 @@ func (i *defaultImageInspector) Inspect() error {
 		})
 
 		http.HandleFunc(METADATA_URL_PATH, func(w http.ResponseWriter, r *http.Request) {
-			body, err := json.MarshalIndent(imageMetadata, "", "  ")
+			body, err := json.MarshalIndent(i.meta, "", "  ")
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			w.Write(body)
+		})
+
+		http.HandleFunc(OPENSCAP_URL_PATH, func(w http.ResponseWriter, r *http.Request) {
+			if (len(i.opts.OscapResultsArf) > 0) && i.meta.OpenSCAP.Status == iicmd.StatusSuccess {
+				w.Write(arf_body)
+			} else {
+				if i.meta.OpenSCAP.Status == iicmd.StatusError {
+					http.Error(w, fmt.Sprintf("OpenSCAP Error: %s", i.meta.OpenSCAP.ErrorMessage),
+						http.StatusInternalServerError)
+				} else {
+					http.Error(w, "OpenSCAP option was not chosen", http.StatusNotFound)
+				}
+			}
 		})
 
 		http.Handle(CONTENT_URL_PREFIX, &webdav.Handler{
@@ -297,4 +321,24 @@ func getAuthConfigs(dockercfg, username, password_file string) (*docker.AuthConf
 	}
 
 	return imagePullAuths, nil
+}
+
+func (i *defaultImageInspector) runOpenSCAP() []byte {
+	log.Printf("OpenSCAP scanning %s", i.opts.DstPath)
+	scanner := openscap.NewDefaultScanner(i.opts.DstPath, OSCAP_CVE_DIR,
+		i.opts.OscapResultsArf, &i.meta.Image)
+	err := scanner.Scan()
+	if err != nil {
+		fmt.Printf("Unable to run OpenSCAP: %v\n", err)
+	} else {
+		arf_body, err := ioutil.ReadFile(i.opts.OscapResultsArf)
+		if err != nil {
+			log.Printf("Unable to read OpenSCAP result file: %v\n", err)
+		} else {
+			i.meta.OpenSCAP.Status = iicmd.StatusSuccess
+			return arf_body
+		}
+	}
+	i.meta.OpenSCAP.SetError(err)
+	return []byte("")
 }
