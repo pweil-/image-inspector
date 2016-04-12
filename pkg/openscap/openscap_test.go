@@ -36,35 +36,31 @@ func (s *testScanner) getInputCVE(d int) (string, error) {
 	return s.getInputCVEString, s.getInputCVEError
 }
 
-func (s *testScanner) getRHELDist() (int, error) {
-	if s.getRHELDistOriginal {
-		return s.defaultScanner.getRHELDist()
-	}
-	return s.getRHELDistInt, s.getRHELDistError
+func getRHELDist() (int, error) {
+	return 0, fmt.Errorf("paul's error")
 }
 
 func TestScan(t *testing.T) {
-	ds := &defaultScanner{"chrootPath", "cveDir", "arfResultFileName", nil}
+	ds := &defaultScanner{}
+	ds.rhelDist = getRHELDist
 
 	tests := map[string]struct {
-		ts         *testScanner
+		ts         Scanner
 		shouldFail bool
 	}{
 		"cant find rhel dist": {
-			ts: &testScanner{
-				getRHELDistOriginal: false,
-				getRHELDistInt:      0,
-				getRHELDistError:    fmt.Errorf("could not find RHEL dist"),
-			},
+			ts: ds,
 			shouldFail: true,
 		},
 	}
 
 	for k, v := range tests {
-		v.ts.defaultScanner = *ds
 		err := v.ts.Scan()
 		if v.shouldFail && err == nil {
 			t.Errorf("%s expected  to cause error but it didn't", k)
 		}
+
+		// TODO check expected error
+		t.Errorf("err: %v", err)
 	}
 }

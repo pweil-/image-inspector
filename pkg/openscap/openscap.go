@@ -34,6 +34,9 @@ type Scanner interface {
 	Scan() error
 }
 
+// rhelDistFunc provides an injectable way to get the rhel dist for testing.
+type rhelDistFunc func() (int, error)
+
 type defaultScanner struct {
 	// ChrootPath is the path where the image to be scanned is mounted
 	ChrootPath string
@@ -43,11 +46,24 @@ type defaultScanner struct {
 	ArfResultFileName string
 	// Image is the metadata of the inspected image
 	Image *docker.Image
+
+	rhelDist rhelDistFunc
 }
 
 func NewDefaultScanner(chrootPath string, cveDir string,
 	arfResultFileName string, image *docker.Image) Scanner {
-	return &defaultScanner{chrootPath, cveDir, arfResultFileName, image}
+	scanner := &defaultScanner{
+		ChrootPath: chrootPath,
+		CVEDir: cveDir,
+		ArfResultFileName: arfResultFileName,
+		Image: image,
+	}
+
+	// set up the functions for defaults.  If they can be removed from the scanner object
+	// that is ok too (ie. not applied to the pointer as func (s *defaultScanner)
+	scanner.rhelDist = scanner.getRHELDist
+
+	return scanner
 }
 
 func (s *defaultScanner) getRHELDist() (int, error) {
@@ -126,7 +142,7 @@ func (s *defaultScanner) oscapChroot(oscapArgs ...string) ([]byte, error) {
 }
 
 func (s *defaultScanner) Scan() error {
-	rhelDist, err := s.getRHELDist()
+	rhelDist, err := s.rhelDist()
 	if err != nil {
 		return fmt.Errorf("Unable to get RHEL distribution number: %v\n", err)
 	}
